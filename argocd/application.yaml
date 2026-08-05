@@ -1,0 +1,34 @@
+# Manifiesto de ArgoCD: registra nuestra app para despliegue automatico desde Git
+#
+# Despues de aplicar esto (kubectl apply -f ./argocd/application.yaml),
+# ArgoCD vigila el repo y mantiene el cluster igual a lo que hay en main.
+#
+# Flujo: CI actualiza tag en values.yaml -> ArgoCD detecta commit -> sync en K8S
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: mi-microservicio
+  namespace: argocd   # la Application vive en argocd; la app se despliega en mi-microservicio
+spec:
+  project: default
+
+  source:
+    repoURL: https://github.com/fabianroga77/mi-microservicio.git
+    targetRevision: main
+    path: helm/mi-microservicio
+    helm:
+      # solo values.yaml — values-prod.yaml es para helm manual, no entra aca
+      valueFiles:
+        - values.yaml
+
+  destination:
+    server: https://kubernetes.default.svc   # cluster donde corre Minikube
+    namespace: mi-microservicio
+
+  syncPolicy:
+    automated:
+      prune: true      # si borramos algo del chart en Git, ArgoCD lo quita del cluster
+      selfHeal: true   # si alguien cambia el cluster a mano, ArgoCD lo revierte
+    syncOptions:
+      - CreateNamespace=true   # crea mi-microservicio si no existe

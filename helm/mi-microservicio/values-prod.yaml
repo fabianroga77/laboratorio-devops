@@ -1,0 +1,17 @@
+# Override manual para prod (ArgoCD no lo carga)
+replicaCount: 2
+
+image:
+  tag: "latest"
+
+env:
+  APP_ENV: "production"
+  APP_VERSION: "2.1.0"
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 200m
+    memory: 128Mi

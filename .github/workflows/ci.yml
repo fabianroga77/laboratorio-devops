@@ -1,0 +1,160 @@
+# Pipeline CI/CD completo
+#
+#   push a main
+#     -> Job 1: tests + validacion Helm
+#     -> Job 2: build + push imagen a ghcr.io (tag = SHA)
+#     -> Job 3: commit automatico del tag en values.yaml
+#     -> ArgoCD despliega rolling update en el cluster
+#
+# Los commits con [skip ci] no disparan el pipeline (evita loop del bot)
+
+name: CI/CD - Build, Push y Deploy
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/mi-microservicio
+
+jobs:
+
+  # --- Job 1: validar antes de construir ---
+  test:
+    name: Test y validacion
+    if: ${{ !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Smoke tests de la API
+        working-directory: app
+        run: |
+          python - <<'EOF'
+          from fastapi.testclient import TestClient
+          from main import app
+
+          client = TestClient(app)
+
+          health = client.get("/health")
+          assert health.status_code == 200, health.text
+          assert health.json()["status"] == "ok"
+
+          clientes = client.get("/api/v1/clientes")
+          assert clientes.status_code == 200, clientes.text
+          assert clientes.json()["total"] >= 2
+
+          transfer = client.post(
+              "/api/v1/transacciones/transferencia",
+              json={
+                  "cuenta_origen_id": "seed-cuenta-001",
+                  "cuenta_destino_id": "seed-cuenta-002",
+                  "monto": 10000,
+              },
+          )
+          assert transfer.status_code == 201, transfer.text
+          print("Smoke tests OK")
+          EOF
+
+      - name: Validar chart de Helm
+        run: helm lint helm/mi-microservicio
+
+      - name: Verificar que el chart renderiza
+        run: helm template mi-microservicio helm/mi-microservicio --namespace mi-microservicio > /dev/null
+
+  # --- Job 2: construir y publicar imagen ---
+  build-and-push:
+    name: Build & Push Docker Image
+    needs: test
+    if: ${{ github.event_name != 'pull_request' && !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.sha.outputs.short }}
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+
+      - name: Calcular SHA corto del commit
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
+      - name: Autenticacion en GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extraer metadata para el tag de la imagen
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ steps.sha.outputs.short }}
+            type=raw,value=latest
+
+      - name: Construir y publicar imagen Docker
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # --- Job 3: actualizar Helm para ArgoCD ---
+  update-helm-tag:
+    name: Update Helm Image Tag
+    needs: build-and-push
+    if: ${{ github.event_name != 'pull_request' && !contains(github.event.head_commit.message, '[skip ci]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Actualizar tag de imagen en values.yaml
+        run: |
+          NEW_TAG="${{ needs.build-and-push.outputs.image_tag }}"
+          sed -i "s/  tag: .*/  tag: \"${NEW_TAG}\"/" helm/mi-microservicio/values.yaml
+          echo "Tag actualizado a: ${NEW_TAG}"
+
+      - name: Commit y push del nuevo tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add helm/mi-microservicio/values.yaml
+          if git diff --cached --quiet; then
+            echo "El tag no cambio, nada que commitear."
+          else
+            git commit -m "ci: actualizar imagen a ${{ needs.build-and-push.outputs.image_tag }} [skip ci]"
+            git push
+          fi

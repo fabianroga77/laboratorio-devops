@@ -1,0 +1,17 @@
+# Service: balancea trafico entre pods sanos (Ingress apunta aqui)
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mi-microservicio.fullname" . }}
+  labels:
+    {{- include "mi-microservicio.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: {{ .Values.service.targetPort }}
+      protocol: TCP
+      name: http
+  # el selector enlaza este Service con los pods del Deployment (mismas labels)
+  selector:
+    {{- include "mi-microservicio.selectorLabels" . | nindent 4 }}

@@ -1,0 +1,67 @@
+# Valores por defecto del chart (entorno development)
+#
+# Este archivo lo usan:
+#   - helm install/upgrade (si lo corres a mano)
+#   - ArgoCD (lee values.yaml del repo)
+#   - el CI (actualiza el tag de la imagen despues de cada build)
+
+# 2 replicas stateless — rolling update sin pelear por volumenes
+replicaCount: 2
+
+image:
+  repository: ghcr.io/fabianroga77/mi-microservicio
+  pullPolicy: IfNotPresent
+  # el CI sobrescribe esto con el SHA del commit; no editar a mano salvo la primera vez
+  tag: "51997b1"
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations: {}
+  hosts:
+    - host: banking.local
+      paths:
+        - path: /
+          pathType: Prefix
+
+# Zero-downtime: sube pod nuevo antes de tumbar el viejo (posible con stateless)
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+
+terminationGracePeriodSeconds: 30
+lifecycle:
+  preStopSleep: 5
+
+env:
+  APP_ENV: "development"
+  APP_VERSION: "2.1.0"
+
+resources:
+  limits:
+    cpu: 200m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 10
