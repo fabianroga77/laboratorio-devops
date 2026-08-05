@@ -14,6 +14,8 @@
 //   - Docker disponible en el agente (Docker Pipeline plugin)
 // =============================================================================
 
+
+
 pipeline {
     agent any
 
