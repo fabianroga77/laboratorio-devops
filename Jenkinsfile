@@ -50,23 +50,14 @@ pipeline {
 
         // --- Stage 2: Pruebas rápidas antes de empaquetar (buena práctica) ---
         stage('Pruebas de humo') {
-    steps {
-        echo "Ejecutando smoke tests de la API antes de construir la imagen..."
-
-        sh '''
-            docker run --rm \
-                -v "$PWD:/workspace" \
-                -w /workspace \
-                python:3.11-slim \
-                bash -c '
-                    python --version
-                    python -m venv .venv
-                    .venv/bin/pip install --quiet --upgrade pip
-                    .venv/bin/pip install --quiet -r requirements.txt
-
+            steps {
+                echo "Ejecutando smoke tests de la API antes de construir la imagen..."
+                sh '''
+                    python3 -m venv .venv
+                    . .venv/bin/activate
+                    pip install --quiet -r requirements.txt
                     cd app
-
-                    ../.venv/bin/python - <<'"'"'EOF'"'
+                    python - <<'EOF'
 from fastapi.testclient import TestClient
 from main import app
 
@@ -84,10 +75,9 @@ assert clientes.json()["total"] >= 2
 
 print("Smoke tests OK")
 EOF
-                '
-        '''
-    }
-}
+                '''
+            }
+        }
 
         // --- Stage 3: Construir la imagen Docker ---
         stage('Construir imagen Docker') {
