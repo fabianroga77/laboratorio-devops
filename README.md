@@ -1,68 +1,67 @@
-# Trabajo K8S — Core Banking Lite
+# Core Banking Lite — Laboratorio CI/CD
 
-Microservicio bancario desplegado con: **Docker → Helm → Kubernetes → ArgoCD → GitHub Actions**.
+Microservicio bancario con pipelines de **CI (GitHub Actions)** y **CD (Jenkins → DockerHub)**, desplegable con **Docker → Helm → Kubernetes → ArgoCD**.
 
 Simula un banco (clientes, cuentas, transacciones en COP). **Stateless**: datos en memoria, pensado para CI/CD, rolling update y varias replicas sin pelear por discos.
 
-**Autores:** Jorge Eliecer Rojas, Juan Esteban Gomez, Fabian Andres Rojas, Juan Velez, David Panesso  
-**Curso:** Arquitectura de Software — Universidad de La Sabana
+**Integrantes:**
+- Fabián Andrés Rojas García
+- Jorge Eliécer Rojas Quiñones
+- Juan Esteban Gómez Roa
+
+**Curso:** Flujos de entrega eficientes: CI/CD y automatización — Universidad de La Sabana
 
 ---
 
-## Que es esto
+## Qué es esto
 
-Backend bancario con API REST y Swagger. Push a `main` dispara un pipeline que:
+Backend bancario con API REST y Swagger. El proyecto implementa **dos pipelines** que
+cubren el ciclo CI/CD de la entrega:
 
-1. Ejecuta **tests** y valida el chart Helm
-2. Construye y publica la **imagen Docker** en ghcr.io
-3. Actualiza el **tag** en `values.yaml`
-4. **ArgoCD** despliega en Kubernetes con rolling update (sin tumbar todo)
+- **CI — GitHub Actions** (`.github/workflows/ci.yml`): valida el código en cada push
+  y pull request (pruebas de la API + validación del chart de Helm).
+- **CD — Jenkins** (`Jenkinsfile`): construye la imagen Docker del backend y la publica
+  en **DockerHub**.
+
+Como complemento, el repositorio conserva la infraestructura de despliegue en
+**Kubernetes con Helm y ArgoCD** del proyecto base, documentada más abajo.
 
 ---
 
-## Pipeline CI/CD completo
+## Pipeline de la entrega: CI (GitHub Actions) + CD (Jenkins)
 
 ```mermaid
-flowchart TB
-    A[git push main] --> B{commit tiene skip ci?}
-    B -->|No| C[Job 1: Test]
-    C --> C1[Smoke tests API]
-    C --> C2[helm lint + template]
-    C1 --> D[Job 2: Build and Push]
-    C2 --> D
-    D --> D1[Imagen ghcr.io:SHA]
-    D1 --> E[Job 3: Update Helm Tag]
-    E --> E1[Commit values.yaml]
-    E1 --> F[ArgoCD sync]
-    F --> G[Rolling update 2 replicas]
-    G --> H[Ingress banking.local]
-    B -->|Si| X[Pipeline omitido]
+flowchart LR
+    subgraph CI["CI — GitHub Actions"]
+        A[git push / pull request] --> B[Smoke tests API]
+        B --> C[helm lint + template]
+    end
+    subgraph CD["CD — Jenkins"]
+        D[Clonar repo] --> E[docker build]
+        E --> F[Prueba de humo /health]
+        F --> G[docker push a DockerHub]
+    end
+    C -.-> D
 ```
 
-| Job | Que hace |
-|-----|----------|
-| **Test** | `/health`, clientes seed, transferencia de prueba, `helm lint` |
-| **Build & Push** | Docker build → `ghcr.io/usuario/mi-microservicio:SHA` |
-| **Update Helm Tag** | Commit automatico del tag en `values.yaml` con `[skip ci]` |
+### CI — GitHub Actions (`.github/workflows/ci.yml`)
 
-Disparo manual: pestaña **Actions** → **Run workflow** (`workflow_dispatch`).
+| Etapa | Qué hace |
+|-------|----------|
+| **Checkout** | Descarga el código de la rama |
+| **Setup Python** | Configura Python 3.11 e instala dependencias |
+| **Smoke tests** | Valida `/health`, datos seed y una transferencia de prueba |
+| **Validar Helm** | `helm lint` + `helm template` sobre el chart |
 
-El CI dispara en **push a `main`** y en **pull request** hacia `main`. En un PR corre
-solo la validación (tests + Helm); la publicación de imagen queda para el push a `main`.
+Dispara en **push a `main`** y en **pull request** hacia `main`.
 
----
+### CD — Jenkins (`Jenkinsfile`)
 
-## CD con Jenkins (`Jenkinsfile`)
-
-Además del CD por GitHub Actions + ArgoCD, el repo incluye un **`Jenkinsfile`** que
-define un pipeline de entrega continua independiente, orientado a publicar la imagen
-en **DockerHub**. Sus stages:
-
-| Stage | Que hace |
+| Stage | Qué hace |
 | --- | --- |
 | **Clonar repositorio** | Clona `main` y captura el SHA corto del commit |
-| **Pruebas de humo** | Valida `/health` y datos seed antes de empaquetar |
 | **Construir imagen Docker** | `docker build` con tags: `build-N`, SHA y `latest` |
+| **Prueba de humo** | Levanta el contenedor y consulta `/health` antes de publicar |
 | **Publicar en DockerHub** | `docker login` + `docker push` de las tres etiquetas |
 
 **Requisitos en Jenkins:**
@@ -70,6 +69,15 @@ en **DockerHub**. Sus stages:
   (usuario de DockerHub + un Access Token, no la contraseña).
 - Docker disponible en el agente.
 - Ajustar `DOCKERHUB_USER` en el `Jenkinsfile` si tu usuario difiere.
+
+---
+
+## Infraestructura complementaria: Kubernetes + ArgoCD
+
+Además de los dos pipelines de la entrega, el repositorio incluye la infraestructura
+de despliegue en Kubernetes del proyecto base: un chart de **Helm** y una definición de
+**ArgoCD** que despliega el servicio con rolling update y 2 réplicas. Esta parte se
+documenta en las secciones de Kubernetes y ArgoCD más abajo.
 
 ---
 
@@ -131,7 +139,7 @@ Swagger en `/docs`.
 | GET | `/info` | Runtime del pod |
 | GET | `/docs` | Swagger UI |
 
-IDs seed: `seed-cliente-001`, `seed-cuenta-001`, `seed-cuenta-002`, `seed-cuenta-003`
+IDs seed: `seed-cliente-001`, `seed-cliente-002`, `seed-cuenta-001`, `seed-cuenta-002`, `seed-cuenta-003`
 
 ---
 
@@ -147,9 +155,10 @@ IDs seed: `seed-cliente-001`, `seed-cuenta-001`, `seed-cuenta-002`, `seed-cuenta
 ## Estructura del repo
 
 ```
-mi-microservicio/
+laboratorio-devops/
 ├── app/
 ├── Dockerfile
+├── Jenkinsfile
 ├── helm/mi-microservicio/
 │   ├── values.yaml
 │   └── templates/
@@ -230,7 +239,7 @@ Estado esperado: **Synced** + **Healthy**
 |-------|----------|
 | `values.yaml` → `env.APP_VERSION` | Swagger + `/info` en el cluster |
 | `helm/.../Chart.yaml` → `appVersion` | Metadata del chart |
-| `image.tag` en `values.yaml` | Lo actualiza el **CI** (SHA del commit) — no tocar a mano |
+| `image.tag` en `values.yaml` | Lo usa el despliegue en Kubernetes (flujo ArgoCD complementario) |
 
 ---
 
@@ -254,4 +263,5 @@ curl http://banking.local/health
 | 422 | Saldo insuficiente |
 | 400 | Cuenta bloqueada/cerrada |
 
-Si el pipeline falla en **Test**, no se publica imagen. Revisa la pestaña Actions en GitHub.
+Si el CI falla en los **tests**, revisa la pestaña Actions en GitHub. El CD en Jenkins
+solo debe ejecutarse sobre código que ya pasó la validación del CI.
