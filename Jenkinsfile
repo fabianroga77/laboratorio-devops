@@ -50,34 +50,44 @@ pipeline {
 
         // --- Stage 2: Pruebas rápidas antes de empaquetar (buena práctica) ---
         stage('Pruebas de humo') {
-            steps {
-                echo "Ejecutando smoke tests de la API antes de construir la imagen..."
-                sh '''
-                    python3 -m venv .venv
-                    . .venv/bin/activate
-                    pip install --quiet -r requirements.txt
+    steps {
+        echo "Ejecutando smoke tests de la API antes de construir la imagen..."
+
+        sh '''
+            docker run --rm \
+                -v "$PWD:/workspace" \
+                -w /workspace \
+                python:3.11-slim \
+                bash -c '
+                    python --version
+                    python -m venv .venv
+                    .venv/bin/pip install --quiet --upgrade pip
+                    .venv/bin/pip install --quiet -r requirements.txt
+
                     cd app
-                    python - <<'EOF'
-from fastapi.testclient import TestClient
-from main import app
 
-client = TestClient(app)
+                    ../.venv/bin/python - <<'"'"'EOF'"'
+                from fastapi.testclient import TestClient
+                from main import app
 
-# El servicio responde y está sano
-health = client.get("/health")
-assert health.status_code == 200, health.text
-assert health.json()["status"] == "ok"
+                client = TestClient(app)
 
-# Los datos seed cargan correctamente
-clientes = client.get("/api/v1/clientes")
-assert clientes.status_code == 200, clientes.text
-assert clientes.json()["total"] >= 2
+                # El servicio responde y está sano
+                health = client.get("/health")
+                assert health.status_code == 200, health.text
+                assert health.json()["status"] == "ok"
 
-print("Smoke tests OK")
-EOF
-                '''
-            }
-        }
+                # Los datos seed cargan correctamente
+                clientes = client.get("/api/v1/clientes")
+                assert clientes.status_code == 200, clientes.text
+                assert clientes.json()["total"] >= 2
+
+                print("Smoke tests OK")
+                EOF
+                '
+        '''
+    }
+}
 
         // --- Stage 3: Construir la imagen Docker ---
         stage('Construir imagen Docker') {
