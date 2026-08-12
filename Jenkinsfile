@@ -20,7 +20,7 @@ pipeline {
 
     environment {
         // Usuario de DockerHub. La imagen se publica como <usuario>/laboratorio-devops
-        DOCKERHUB_USER = 'fabianroga77'
+        DOCKERHUB_USER = 'fabianrojas77'
         IMAGE_NAME     = "${DOCKERHUB_USER}/laboratorio-devops"
         IMAGE_TAG      = "build-${env.BUILD_NUMBER}"
     }
