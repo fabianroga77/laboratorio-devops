@@ -33,10 +33,7 @@ pipeline {
 
         stage('Clonar repositorio') {
             steps {
-                echo "Clonando el repositorio del microservicio..."
-
-                git branch: 'main',
-                    url: 'https://github.com/fabianroga77/mi-microservicio.git'
+                echo "Repositorio obtenido por Jenkins SCM"
 
                 script {
                     env.GIT_SHA = sh(
@@ -47,7 +44,7 @@ pipeline {
                     echo "Commit desplegado: ${env.GIT_SHA}"
                 }
             }
-        }
+        }       
 
         stage('Pruebas de humo') {
             steps {
