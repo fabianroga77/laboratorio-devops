@@ -15,15 +15,12 @@
 // =============================================================================
 
 
-
 pipeline {
     agent any
 
     environment {
-        // Cambiar <usuario-dockerhub> por el usuario real de DockerHub
         DOCKERHUB_USER = 'fabianroga77'
         IMAGE_NAME     = "${DOCKERHUB_USER}/mi-microservicio"
-        // Tag basado en el número de build de Jenkins + short SHA del commit
         IMAGE_TAG      = "build-${env.BUILD_NUMBER}"
     }
 
@@ -34,91 +31,99 @@ pipeline {
 
     stages {
 
-        // --- Stage 1: Clonar el repositorio ---
         stage('Clonar repositorio') {
             steps {
                 echo "Clonando el repositorio del microservicio..."
+
                 git branch: 'main',
                     url: 'https://github.com/fabianroga77/mi-microservicio.git'
+
                 script {
-                    // Capturamos el SHA corto para etiquetar la imagen de forma trazable
-                    env.GIT_SHA = sh(script: "git rev-parse --short HEAD", returnStdout: true).trim()
+                    env.GIT_SHA = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
                     echo "Commit desplegado: ${env.GIT_SHA}"
                 }
             }
         }
 
-        // --- Stage 2: Pruebas rápidas antes de empaquetar (buena práctica) ---
         stage('Pruebas de humo') {
-    steps {
-        echo "Ejecutando smoke tests de la API antes de construir la imagen..."
-
-        sh '''
-            docker run --rm \
-                -v "$PWD:/workspace" \
-                -w /workspace \
-                python:3.11-slim \
-                bash -c '
-                    python --version
-                    python -m venv .venv
-                    .venv/bin/pip install --quiet --upgrade pip
-                    .venv/bin/pip install --quiet -r requirements.txt
-
-                    cd app
-
-                    ../.venv/bin/python - <<'"'"'EOF'"'
-                from fastapi.testclient import TestClient
-                from main import app
-
-                client = TestClient(app)
-
-                # El servicio responde y está sano
-                health = client.get("/health")
-                assert health.status_code == 200, health.text
-                assert health.json()["status"] == "ok"
-
-                # Los datos seed cargan correctamente
-                clientes = client.get("/api/v1/clientes")
-                assert clientes.status_code == 200, clientes.text
-                assert clientes.json()["total"] >= 2
-
-                print("Smoke tests OK")
-                EOF
-                '
-        '''
-    }
-}
-
-        // --- Stage 3: Construir la imagen Docker ---
-        stage('Construir imagen Docker') {
             steps {
-                echo "Construyendo la imagen ${IMAGE_NAME}:${IMAGE_TAG}..."
-                script {
-                    // Etiquetamos con el número de build y con el SHA del commit
-                    sh """
-                        docker build -t ${IMAGE_NAME}:${IMAGE_TAG} \
-                                     -t ${IMAGE_NAME}:${GIT_SHA} \
-                                     -t ${IMAGE_NAME}:latest .
-                    """
-                }
+                echo "Ejecutando smoke tests de la API antes de construir la imagen..."
+
+                sh '''
+                    cat > smoke_test.py <<'PYEOF'
+from fastapi.testclient import TestClient
+from main import app
+
+client = TestClient(app)
+
+# El servicio responde y está sano
+health = client.get("/health")
+
+assert health.status_code == 200, health.text
+assert health.json()["status"] == "ok"
+
+# Los datos seed cargan correctamente
+clientes = client.get("/api/v1/clientes")
+
+assert clientes.status_code == 200, clientes.text
+assert clientes.json()["total"] >= 2
+
+print("Smoke tests OK")
+PYEOF
+
+                    docker run --rm \
+                        -v "$PWD:/workspace" \
+                        -w /workspace \
+                        python:3.11-slim \
+                        bash -c "
+                            python --version &&
+                            python -m venv .venv &&
+                            .venv/bin/pip install --quiet --upgrade pip &&
+                            .venv/bin/pip install --quiet -r requirements.txt &&
+                            .venv/bin/python -c 'import sys; sys.path.insert(0, \"app\"); exec(open(\"smoke_test.py\").read())'
+                        "
+                '''
             }
         }
 
-        // --- Stage 4: Publicar la imagen en DockerHub ---
+        stage('Construir imagen Docker') {
+            steps {
+                echo "Construyendo la imagen ${IMAGE_NAME}:${IMAGE_TAG}..."
+
+                sh """
+                    docker build \
+                        -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                        -t ${IMAGE_NAME}:${GIT_SHA} \
+                        -t ${IMAGE_NAME}:latest \
+                        .
+                """
+            }
+        }
+
         stage('Publicar en DockerHub') {
             steps {
                 echo "Publicando la imagen en DockerHub..."
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-credentials',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
-                    sh '''
-                        echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
-                        docker push ''' + "${IMAGE_NAME}:${IMAGE_TAG}" + '''
-                        docker push ''' + "${IMAGE_NAME}:${GIT_SHA}" + '''
-                        docker push ''' + "${IMAGE_NAME}:latest" + '''
-                    '''
+
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'dockerhub-credentials',
+                        usernameVariable: 'DOCKER_USER',
+                        passwordVariable: 'DOCKER_PASS'
+                    )
+                ]) {
+                    sh """
+                        echo "\$DOCKER_PASS" | docker login \
+                            -u "\$DOCKER_USER" \
+                            --password-stdin
+
+                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                        docker push ${IMAGE_NAME}:${GIT_SHA}
+                        docker push ${IMAGE_NAME}:latest
+                    """
                 }
             }
         }
@@ -128,13 +133,21 @@ pipeline {
         success {
             echo "CD completado. Imagen publicada: ${IMAGE_NAME}:${IMAGE_TAG} (commit ${GIT_SHA})"
         }
+
         failure {
             echo "El pipeline de CD falló. Revisar los logs del stage correspondiente."
         }
+
         always {
-            // Limpieza: cerramos sesión de Docker y borramos imágenes locales del build
             sh 'docker logout || true'
-            sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} ${IMAGE_NAME}:${GIT_SHA} ${IMAGE_NAME}:latest || true"
+
+            sh """
+                docker rmi \
+                    ${IMAGE_NAME}:${IMAGE_TAG} \
+                    ${IMAGE_NAME}:${GIT_SHA} \
+                    ${IMAGE_NAME}:latest \
+                    || true
+            """
         }
     }
 }
